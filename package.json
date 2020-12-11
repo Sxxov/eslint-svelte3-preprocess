@@ -84,6 +84,8 @@
   "dependencies": {
     "@types/deasync": "^0.1.1",
     "deasync": "^0.1.21",
-    "patch-package": "^6.2.2"
+    "patch-package": "^6.2.2",
+    "postcss": "^8.2.1",
+    "svelte-preprocess": "^4.6.1"
   }
 }
