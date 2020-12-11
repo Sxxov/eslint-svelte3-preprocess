@@ -100,12 +100,11 @@ function getEslintSveltePreprocess(worker: Worker) {
 			}
 		});
 
+		// Item is actually modified when postMessage is fired
 		// eslint-disable-next-line no-unmodified-loop-condition
 		while (!isDone) {
 			deasync.sleep(10);
 		}
-
-		// `deasync.loopWhile(() => result === undefined);
 
 		return result as Result;
 	};
