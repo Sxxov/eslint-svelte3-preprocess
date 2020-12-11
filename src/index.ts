@@ -68,14 +68,24 @@ let eslintSveltePreprocess:
 	| undefined;
 
 if (isMainThread) {
-	// `import.meta.url` is needed for esm interop
-	// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
-	// @ts-ignore
-	const worker = new Worker(__filename ?? import.meta?.url);
+	if (!getWorkingWorker()) {
+		// `import.meta.url` is needed for esm interop
+		// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
+		// @ts-ignore
+		setWorkingWorker(new Worker(__filename ?? import.meta?.url));
+	}
 
-	eslintSveltePreprocess = getEslintSveltePreprocess(worker);
+	eslintSveltePreprocess = getEslintSveltePreprocess(getWorkingWorker());
 } else {
-	worker();
+	newWorker();
+}
+
+function getWorkingWorker(): Worker {
+	return globalThis.__eslintSveltePreprocessWorker;
+}
+
+function setWorkingWorker(worker: Worker): void {
+	globalThis.__eslintSveltePreprocessWorker = worker;
 }
 
 function getEslintSveltePreprocess(worker: Worker) {
@@ -100,17 +110,27 @@ function getEslintSveltePreprocess(worker: Worker) {
 			}
 		});
 
-		// Item is actually modified when postMessage is fired
+		// If timeout at 2000ms, or worker is done
 		// eslint-disable-next-line no-unmodified-loop-condition
-		while (!isDone) {
+		for (let i = 0; i < 200 || !isDone; ++i) {
 			deasync.sleep(10);
 		}
+
+		if (!isDone) {
+			// Continue trying for 2000ms at lower ping rate
+			// eslint-disable-next-line no-unmodified-loop-condition
+			for (let i = 0; i < 20 || !isDone; ++i) {
+				deasync.sleep(100);
+			}
+		}
+
+		worker.removeAllListeners("message");
 
 		return result as Result;
 	};
 }
 
-function worker() {
+function newWorker() {
 	if (parentPort === null) {
 		throw new Error("parentPort is null");
 	}
