@@ -1,120 +1,75 @@
 import { PreprocessorGroup } from "svelte/types/compiler/preprocess";
-import { preprocess } from "svelte/compiler";
-import deasyncPromise from "deasync-promise";
-import esTree from "@typescript-eslint/typescript-estree";
+import deasync from "deasync";
+import { Worker } from "worker_threads";
+import {
+	Message,
+	PreprocesssWithPreprocessorsData,
+	RequestMessageTypes,
+	ResponseMessageTypes,
+} from "./worker/index";
 
-interface Markup {
+export interface Markup {
 	original: string;
 	result?: string;
 	diff?: number;
 }
 
-interface Script {
+export interface Script {
 	ast: unknown;
 	original: string;
 	ext: string;
 	result?: string;
 	diff?: number;
 }
-interface Style {
+export interface Style {
 	original: string;
 	result?: string;
 	diff?: number;
 }
 
-interface Result {
+export interface Result {
+	// Custom results
 	module: Script;
 	instance: Script;
 	style: Style;
+	markup: Markup;
+
+	// Svelte compiler preprocess results
+	code: string;
+	dependencies: unknown[];
+	toString: () => string;
 }
 
 type proprocessFunction = (src: string, filename: string) => Result;
 
+const worker = new Worker("./worker/index.js");
 const eslintSveltePreprocess = (
 	preprocessors:
 		| Readonly<PreprocessorGroup>
 		| ReadonlyArray<Readonly<PreprocessorGroup>>,
 ): proprocessFunction => (src: string, filename: string): Result => {
-	let markup: Markup | undefined;
-	let module: Script | undefined;
-	let instance: Script | undefined;
-	let style: Style | undefined;
+	let result: Result | undefined;
 
-	const res = deasyncPromise(
-		preprocess(
+	worker.postMessage(
+		new Message(RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS, {
 			src,
-			[
-				{
-					markup: ({ content }) => {
-						markup = {
-							original: content,
-						};
-					},
-					script: ({ content, attributes }) => {
-						// Supported scenarios
-						// type="text/typescript"
-						// lang="typescript"
-						// lang="ts"
-						if (
-							attributes.lang === "ts" ||
-							attributes.lang === "typescript" ||
-							attributes.type === "text/typescript"
-						) {
-							const ast = esTree.parse(content, { loc: true });
-
-							const obj = {
-								ast,
-								original: content,
-								ext: "ts",
-							};
-
-							if (attributes.context) {
-								module = obj;
-							} else {
-								instance = obj;
-							}
-						}
-					},
-					style: ({ content }) => {
-						style = {
-							original: content,
-						};
-					},
-				},
-				...(Array.isArray(preprocessors) ? preprocessors : [preprocessors]),
-				{
-					markup: ({ content }) => {
-						if (markup) {
-							markup.result = content;
-							markup.diff = markup.original.length - content.length;
-						}
-					},
-					script: ({ content, attributes }) => {
-						const obj = attributes.context ? module : instance;
-						if (obj) {
-							obj.result = content;
-							obj.diff = obj.original.length - content.length;
-						}
-					},
-					style: ({ content }) => {
-						if (style) {
-							style.result = content;
-							style.diff = style.original.length - content.length;
-						}
-					},
-				},
-			],
-			{ filename: filename || "unknown" },
-		),
+			filename,
+			preprocessors,
+		} as PreprocesssWithPreprocessorsData),
 	);
 
-	return {
-		...res,
-		module,
-		instance,
-		style,
-		markup,
-	};
+	worker.on("message", (message) => {
+		switch (message.type) {
+			case ResponseMessageTypes.PREPROCESS_RESULT:
+				result = message.data as Result;
+				break;
+			default:
+		}
+	});
+
+	deasync.loopWhile(() => result === undefined);
+
+	return result as Result;
 };
 
 module.exports = eslintSveltePreprocess;
