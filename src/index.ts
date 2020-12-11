@@ -3,7 +3,9 @@ import deasync from "deasync";
 import { Worker, parentPort, isMainThread } from "worker_threads";
 import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
-import sveltePreprocess from "svelte-preprocess/dist/processors/typescript";
+import { sveltePreprocess } from "svelte-preprocess/dist/autoProcess";
+
+type AutoPreprocessOptions = Parameters<typeof sveltePreprocess>[0];
 
 export interface Markup {
 	original: string;
@@ -50,6 +52,7 @@ enum ResponseMessageTypes {
 interface PreprocesssWithPreprocessorsData {
 	src: string;
 	filename: string;
+	autoPreprocessConfig: AutoPreprocessOptions;
 }
 
 class Message {
@@ -89,7 +92,10 @@ function setWorkingWorker(worker: Worker): void {
 }
 
 function getEslintSveltePreprocess(worker: Worker) {
-	return (): proprocessFunction => (src: string, filename: string): Result => {
+	return (autoPreprocessConfig: AutoPreprocessOptions): proprocessFunction => (
+		src: string,
+		filename: string,
+	): Result => {
 		let result: Result | undefined;
 		let isDone = false;
 
@@ -97,6 +103,7 @@ function getEslintSveltePreprocess(worker: Worker) {
 			new Message(RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS, {
 				src,
 				filename,
+				autoPreprocessConfig,
 			} as PreprocesssWithPreprocessorsData),
 		);
 
@@ -160,8 +167,9 @@ function newWorker() {
 	async function preprocess({
 		src,
 		filename,
+		autoPreprocessConfig,
 	}: PreprocesssWithPreprocessorsData): Promise<Result> {
-		const preprocessors = [sveltePreprocess()];
+		const preprocessors = [sveltePreprocess(autoPreprocessConfig)];
 		let markup: Markup | undefined;
 		let module: Script | undefined;
 		let instance: Script | undefined;
