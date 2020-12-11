@@ -16,7 +16,7 @@ pnpm i -D eslint-svelte3-preprocess
 
 ## Usage
 
-After following the docs of [`eslint-plugin-svelte3`](https://github.com/sveltejs/eslint-plugin-svelte3) to configure your `eslintrc.js` file, you will need to add some props required by [@typescript-eslint/parser](https://github.com/typescript-eslint/typescript-eslint/tree/master/packages/parser) and finally import your `svelte.config` file (if you would like to use the same configuration) and call the `elint-plugin-svelte3-preprocess` passing your preprocess as a parameter.
+After following the docs of [`eslint-plugin-svelte3`](https://github.com/sveltejs/eslint-plugin-svelte3) to configure your `eslintrc.js` file, you will need to add some props required by [@typescript-eslint/parser](https://github.com/typescript-eslint/typescript-eslint/tree/master/packages/parser) and finally import your `svelte.config` file (if you would like to use the same configuration) and call the `elint-plugin-svelte3-preprocess` passing your `autoPreprocessConfig` as a parameter.
 
 This is a example that works!
 
@@ -49,7 +49,10 @@ module.exports = {
         }
     ],
     settings: {
-        'svelte3/preprocess': eslintSveltePreprocess(svelteConfig.preprocess),
+    	// This fork uses workers along with `deasync`
+    	// The preprocesssor object contains functions, and cannot be cloned
+    	// So just use the naked configuration option, you would pass into `svelte-preprocess`
+        'svelte3/preprocess': eslintSveltePreprocess(svelteConfig.autoPreprocessConfig),
 	},
 };
 
