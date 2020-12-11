@@ -5,6 +5,11 @@ import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
 import { sveltePreprocess } from "svelte-preprocess/dist/autoProcess";
 
+const FAST_POLLING_INDIVIDUAL_DURATION_MS = 10;
+const SLOW_POLLING_INDIVIDUAL_DURATION_MS = 100;
+const FAST_POLLING_TOTAL_DURATION_MS = 2000;
+const SLOW_POLLING_TOTAL_DURATION_MS = 2000;
+
 type AutoPreprocessOptions = Parameters<typeof sveltePreprocess>[0];
 
 export interface Markup {
@@ -49,7 +54,7 @@ enum ResponseMessageTypes {
 	"PREPROCESS_RESULT",
 }
 
-interface PreprocesssWithPreprocessorsData {
+interface PreprocessWithPreprocessorsData {
 	src: string;
 	filename: string;
 	autoPreprocessConfig: AutoPreprocessOptions;
@@ -71,24 +76,14 @@ let eslintSveltePreprocess:
 	| undefined;
 
 if (isMainThread) {
-	if (!getWorkingWorker()) {
+	eslintSveltePreprocess = getEslintSveltePreprocess(
 		// `import.meta.url` is needed for esm interop
 		// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
 		// @ts-ignore
-		setWorkingWorker(new Worker(__filename ?? import.meta?.url));
-	}
-
-	eslintSveltePreprocess = getEslintSveltePreprocess(getWorkingWorker());
+		new Worker(__filename ?? import.meta?.url),
+	);
 } else {
 	newWorker();
-}
-
-function getWorkingWorker(): Worker {
-	return globalThis.__eslintSveltePreprocessWorker;
-}
-
-function setWorkingWorker(worker: Worker): void {
-	globalThis.__eslintSveltePreprocessWorker = worker;
 }
 
 function getEslintSveltePreprocess(worker: Worker) {
@@ -104,7 +99,7 @@ function getEslintSveltePreprocess(worker: Worker) {
 				src,
 				filename,
 				autoPreprocessConfig,
-			} as PreprocesssWithPreprocessorsData),
+			} as PreprocessWithPreprocessorsData),
 		);
 
 		worker.on("message", (message) => {
@@ -118,16 +113,28 @@ function getEslintSveltePreprocess(worker: Worker) {
 		});
 
 		// If timeout at 2000ms, or worker is done
-		// eslint-disable-next-line no-unmodified-loop-condition
-		for (let i = 0; i < 200 || !isDone; ++i) {
-			deasync.sleep(10);
+		for (
+			let i = 0;
+			i <
+				FAST_POLLING_TOTAL_DURATION_MS / FAST_POLLING_INDIVIDUAL_DURATION_MS ||
+			// eslint-disable-next-line no-unmodified-loop-condition
+			!isDone;
+			++i
+		) {
+			deasync.sleep(FAST_POLLING_INDIVIDUAL_DURATION_MS);
 		}
 
 		if (!isDone) {
 			// Continue trying for 2000ms at lower ping rate
-			// eslint-disable-next-line no-unmodified-loop-condition
-			for (let i = 0; i < 20 || !isDone; ++i) {
-				deasync.sleep(100);
+			for (
+				let i = 0;
+				i <
+					SLOW_POLLING_TOTAL_DURATION_MS /
+						// eslint-disable-next-line no-unmodified-loop-condition
+						SLOW_POLLING_INDIVIDUAL_DURATION_MS || !isDone;
+				++i
+			) {
+				deasync.sleep(SLOW_POLLING_INDIVIDUAL_DURATION_MS);
 			}
 		}
 
@@ -149,7 +156,7 @@ function newWorker() {
 			case RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS:
 				try {
 					result = await preprocess(
-						message.data as PreprocesssWithPreprocessorsData,
+						message.data as PreprocessWithPreprocessorsData,
 					);
 				} catch (err) {
 					console.error(err);
@@ -168,7 +175,7 @@ function newWorker() {
 		src,
 		filename,
 		autoPreprocessConfig,
-	}: PreprocesssWithPreprocessorsData): Promise<Result> {
+	}: PreprocessWithPreprocessorsData): Promise<Result> {
 		const preprocessors = [sveltePreprocess(autoPreprocessConfig)];
 		let markup: Markup | undefined;
 		let module: Script | undefined;
