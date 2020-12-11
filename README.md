@@ -16,7 +16,6 @@ pnpm i -D eslint-svelte3-preprocess
 
 ## Usage
 
-<<<<<<< HEAD
 After following the docs of [`eslint-plugin-svelte3`](https://github.com/sveltejs/eslint-plugin-svelte3) to configure your `eslintrc.js` file, you will need to add some props required by [@typescript-eslint/parser](https://github.com/typescript-eslint/typescript-eslint/tree/master/packages/parser) and finally import your `svelte.config` file (if you would like to use the same configuration) and call the `elint-plugin-svelte3-preprocess` passing your `autoPreprocessConfig` as a parameter.
 =======
 
