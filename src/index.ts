@@ -203,7 +203,7 @@ function newWorker() {
 						// Supported scenarios
 						// type="text/typescript"
 						// lang="typescript"
-						// lang="ts"7
+						// lang="ts"
 						if (
 							attributes.lang === "ts" ||
 							attributes.lang === "typescript" ||
