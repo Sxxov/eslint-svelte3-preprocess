@@ -12,26 +12,26 @@ const SLOW_POLLING_TOTAL_DURATION_MS = 2000;
 
 type AutoPreprocessOptions = Parameters<typeof sveltePreprocess>[0];
 
-export interface Markup {
+interface Markup {
 	original: string;
 	result?: string;
 	diff?: number;
 }
 
-export interface Script {
+interface Script {
 	ast: unknown;
 	original: string;
 	ext: string;
 	result?: string;
 	diff?: number;
 }
-export interface Style {
+interface Style {
 	original: string;
 	result?: string;
 	diff?: number;
 }
 
-export interface Result {
+interface Result {
 	// Custom results
 	module: Script;
 	instance: Script;
