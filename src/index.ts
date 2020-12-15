@@ -2,7 +2,7 @@ import deasync from "deasync";
 import { Worker, parentPort, isMainThread } from "worker_threads";
 import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
-import { sveltePreprocess } from "svelte-preprocess/dist/autoProcess";
+import { sveltePreprocess as sveltePreprocessAutoPreprocess } from "svelte-preprocess/dist/autoProcess";
 import {
 	AutoPreprocessOptions,
 	Markup,
@@ -139,7 +139,9 @@ function newWorker() {
 		filename,
 		autoPreprocessConfig,
 	}: PreprocessWithPreprocessorsData): Promise<Result> {
-		const preprocessors = [sveltePreprocess(autoPreprocessConfig)];
+		const preprocessors = [
+			sveltePreprocessAutoPreprocess(autoPreprocessConfig),
+		];
 		let markup: Markup | undefined;
 		let module: Script | undefined;
 		let instance: Script | undefined;
