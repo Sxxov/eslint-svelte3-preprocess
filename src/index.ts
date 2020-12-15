@@ -1,50 +1,22 @@
-import { PreprocessorGroup } from "svelte/types/compiler/preprocess";
 import deasync from "deasync";
 import { Worker, parentPort, isMainThread } from "worker_threads";
 import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
 import { sveltePreprocess } from "svelte-preprocess/dist/autoProcess";
+import {
+	AutoPreprocessOptions,
+	Markup,
+	PreprocessWithPreprocessorsData,
+	proprocessFunction,
+	Result,
+	Script,
+	Style,
+} from "./types";
 
 const FAST_POLLING_INDIVIDUAL_DURATION_MS = 10;
 const SLOW_POLLING_INDIVIDUAL_DURATION_MS = 100;
 const FAST_POLLING_TOTAL_DURATION_MS = 2000;
 const SLOW_POLLING_TOTAL_DURATION_MS = 2000;
-
-type AutoPreprocessOptions = Parameters<typeof sveltePreprocess>[0];
-
-interface Markup {
-	original: string;
-	result?: string;
-	diff?: number;
-}
-
-interface Script {
-	ast: unknown;
-	original: string;
-	ext: string;
-	result?: string;
-	diff?: number;
-}
-interface Style {
-	original: string;
-	result?: string;
-	diff?: number;
-}
-
-interface Result {
-	// Custom results
-	module: Script;
-	instance: Script;
-	style: Style;
-	markup: Markup;
-
-	// Svelte compiler preprocess results
-	code: string;
-	dependencies: unknown[];
-	toString?: () => string;
-}
-
-type proprocessFunction = (src: string, filename: string) => Result;
 
 enum RequestMessageTypes {
 	"PREPROCESS_WITH_PREPROCESSORS",
@@ -54,22 +26,12 @@ enum ResponseMessageTypes {
 	"PREPROCESS_RESULT",
 }
 
-interface PreprocessWithPreprocessorsData {
-	src: string;
-	filename: string;
-	autoPreprocessConfig: AutoPreprocessOptions;
-}
-
 class Message {
 	constructor(
 		public type: RequestMessageTypes | ResponseMessageTypes,
 		public data: unknown,
 	) {}
 }
-
-type Preprocessors =
-	| Readonly<PreprocessorGroup>
-	| ReadonlyArray<Readonly<PreprocessorGroup>>;
 
 let eslintSveltePreprocess:
 	| ReturnType<typeof getEslintSveltePreprocess>
