@@ -116,7 +116,7 @@ function getEslintSveltePreprocess(worker: Worker) {
 		for (
 			let i = 0;
 			i <
-				FAST_POLLING_TOTAL_DURATION_MS / FAST_POLLING_INDIVIDUAL_DURATION_MS ||
+				FAST_POLLING_TOTAL_DURATION_MS / FAST_POLLING_INDIVIDUAL_DURATION_MS &&
 			// eslint-disable-next-line no-unmodified-loop-condition
 			!isDone;
 			++i
@@ -130,8 +130,9 @@ function getEslintSveltePreprocess(worker: Worker) {
 				let i = 0;
 				i <
 					SLOW_POLLING_TOTAL_DURATION_MS /
-						// eslint-disable-next-line no-unmodified-loop-condition
-						SLOW_POLLING_INDIVIDUAL_DURATION_MS || !isDone;
+						SLOW_POLLING_INDIVIDUAL_DURATION_MS &&
+				// eslint-disable-next-line no-unmodified-loop-condition
+				!isDone;
 				++i
 			) {
 				deasync.sleep(SLOW_POLLING_INDIVIDUAL_DURATION_MS);
