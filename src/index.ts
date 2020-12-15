@@ -139,9 +139,6 @@ function newWorker() {
 		filename,
 		autoPreprocessConfig,
 	}: PreprocessWithPreprocessorsData): Promise<Result> {
-		const preprocessors = [
-			sveltePreprocessAutoPreprocess(autoPreprocessConfig),
-		];
 		let markup: Markup | undefined;
 		let module: Script | undefined;
 		let instance: Script | undefined;
@@ -203,7 +200,7 @@ function newWorker() {
 						};
 					},
 				},
-				...(Array.isArray(preprocessors) ? preprocessors : [preprocessors]),
+				sveltePreprocessAutoPreprocess(autoPreprocessConfig),
 				{
 					markup: ({ content }) => {
 						if (markup) {
