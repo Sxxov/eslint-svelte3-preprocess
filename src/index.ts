@@ -27,7 +27,7 @@ enum ResponseMessageTypes {
 	"LOG",
 }
 
-class Message {
+class Message<T> {
 	constructor(
 		public type: RequestMessageTypes | ResponseMessageTypes,
 		public data: unknown,
@@ -38,6 +38,7 @@ let eslintSveltePreprocess:
 	| ReturnType<typeof getEslintSveltePreprocess>
 	| undefined;
 let lastResult: Result;
+let runNumber = 0;
 
 if (isMainThread) {
 	eslintSveltePreprocess = getEslintSveltePreprocess(
@@ -45,50 +46,61 @@ if (isMainThread) {
 		// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
 		// @ts-ignore
 		new Worker(__filename ?? import.meta?.url),
+		new SharedArrayBuffer(64 * 1024 * 1024),
+		new SharedArrayBuffer(1),
 	);
 } else {
 	newWorker();
 }
 
-function getEslintSveltePreprocess(worker: Worker) {
+function getEslintSveltePreprocess(
+	worker: Worker,
+	resultSharedArrayBuffer: SharedArrayBuffer,
+	isDoneSharedArrayBuffer: SharedArrayBuffer,
+) {
 	return (autoPreprocessConfig: AutoPreprocessOptions): proprocessFunction => (
 		src: string,
 		filename: string,
 	): Result => {
-		let result: Result | undefined;
-		let isDone = false;
+		console.log("Main:", "Run number:", runNumber++);
+
+		const isDone = false;
 
 		console.log("Main:", "Sending request to worker");
 
 		worker.postMessage(
-			new Message(RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS, {
-				src,
-				filename,
-				autoPreprocessConfig,
-			} as PreprocessWithPreprocessorsData),
+			new Message<PreprocessWithPreprocessorsData>(
+				RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS,
+				{
+					src,
+					filename,
+					autoPreprocessConfig,
+					resultSharedArrayBuffer,
+					isDoneSharedArrayBuffer,
+				},
+			),
 		);
 
-		worker.on("message", (message) => {
-			switch (message.type) {
-				case ResponseMessageTypes.PREPROCESS_RESULT:
-					console.log("Main:", "Received response from worker");
-					result = message.data as Result;
-					isDone = true;
-					break;
-				case ResponseMessageTypes.LOG:
-					console.log(message.data as string);
-					break;
-				default:
-			}
-		});
+		// Worker.once("message", (message) => {
+		// 	switch (message.type) {
+		// 		case ResponseMessageTypes.PREPROCESS_RESULT:
+		// 			console.log("Main:", "Received response from worker");
+		// 			result = message.data as Result;
+		// 			isDone = true;
+		// 			break;
+		// 		default:
+		// 	}
+		// });
+
+		const resultSharedArrayBufferView = new Uint8Array(resultSharedArrayBuffer);
+		const isDoneSharedArrayBufferView = new Uint8Array(isDoneSharedArrayBuffer);
 
 		// If timeout at 2000ms, or worker is done
 		for (
 			let i = 0;
 			i <
 				FAST_POLLING_TOTAL_DURATION_MS / FAST_POLLING_INDIVIDUAL_DURATION_MS &&
-			// eslint-disable-next-line no-unmodified-loop-condition
-			!isDone;
+			!isDoneSharedArrayBufferView[0];
 			++i
 		) {
 			console.log(
@@ -96,7 +108,8 @@ function getEslintSveltePreprocess(worker: Worker) {
 				"Polling for response from worker (fast), attempt:",
 				i,
 			);
-			deasync.sleep(FAST_POLLING_INDIVIDUAL_DURATION_MS);
+			deasync.runLoopOnce();
+			// Deasync.sleep(FAST_POLLING_INDIVIDUAL_DURATION_MS);
 		}
 
 		if (!isDone) {
@@ -106,8 +119,7 @@ function getEslintSveltePreprocess(worker: Worker) {
 				i <
 					SLOW_POLLING_TOTAL_DURATION_MS /
 						SLOW_POLLING_INDIVIDUAL_DURATION_MS &&
-				// eslint-disable-next-line no-unmodified-loop-condition
-				!isDone;
+				!isDoneSharedArrayBufferView[0];
 				++i
 			) {
 				console.log(
@@ -115,11 +127,19 @@ function getEslintSveltePreprocess(worker: Worker) {
 					"Polling for response from worker (slow), attempt:",
 					i,
 				);
-				deasync.sleep(SLOW_POLLING_INDIVIDUAL_DURATION_MS);
+				deasync.runLoopOnce();
+				// Deasync.sleep(SLOW_POLLING_INDIVIDUAL_DURATION_MS);
 			}
 		}
 
-		worker.removeAllListeners("message");
+		const textDecoder = new TextDecoder();
+		const decodedString = textDecoder.decode(resultSharedArrayBufferView);
+
+		const result = JSON.parse(decodedString) as Result;
+
+		isDoneSharedArrayBufferView[0] = 0;
+
+		// Worker.removeAllListeners("message");
 
 		if (result === undefined) {
 			console.log("Main:", "Result is undefined, returning `lastResult`");
@@ -142,60 +162,57 @@ function newWorker() {
 
 	let result: Result | undefined;
 
-	parentPort.on("message", async (message: Message) => {
-		switch (message.type) {
-			case RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS:
-				log("Worker: Message:", "Received preprocessors");
+	parentPort.on(
+		"message",
+		async (message: Message<PreprocessWithPreprocessorsData>) => {
+			switch (message.type) {
+				case RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS: {
+					console.log("Worker: Message:", "Received preprocessors");
 
-				try {
-					result = await preprocess(
-						message.data as PreprocessWithPreprocessorsData,
+					const {
+						resultSharedArrayBuffer,
+						isDoneSharedArrayBuffer,
+					} = message.data as PreprocessWithPreprocessorsData;
+
+					try {
+						result = await preprocess(
+							message.data as PreprocessWithPreprocessorsData,
+						);
+					} catch (err) {
+						console.log(err);
+						result = undefined;
+					}
+
+					console.log("Worker: Message:", "Finished preprocessing");
+
+					const resultSharedArrayBufferView = new Uint8Array(
+						resultSharedArrayBuffer,
 					);
-				} catch (err) {
-					log(err);
-					result = undefined;
+					const isDoneSharedArrayBufferView = new Uint8Array(
+						isDoneSharedArrayBuffer,
+					);
+					const textEncoder = new TextEncoder();
+
+					resultSharedArrayBufferView.set(
+						textEncoder.encode(JSON.stringify(result)),
+					);
+					isDoneSharedArrayBufferView[0] = 1;
+
+					console.log(
+						"Worker: Message:",
+						"Finished serializing & writing to `resultSharedArrayBuffer`",
+					);
+
+					parentPort?.postMessage(
+						new Message(ResponseMessageTypes.PREPROCESS_RESULT, result),
+					);
+					break;
 				}
 
-				log("Worker: Message:", "Finished preprocessing");
-
-				parentPort?.postMessage(
-					new Message(ResponseMessageTypes.PREPROCESS_RESULT, result),
-				);
-				break;
-			default:
-		}
-	});
-
-	function log(...things: unknown[]): void {
-		const processedThings = things.map((thing) => {
-			switch (typeof thing) {
-				case "number":
-					return String(thing);
-				case "string":
-					return thing;
-				case "object":
-					if (thing === null) {
-						return "null";
-					}
-
-					if (!Number.isNaN(Number((thing as unknown[]).length))) {
-						return `[${(thing as unknown[]).join(", ")}]`;
-					}
-
-					if (thing instanceof Error) {
-						return `${thing.name}: ${thing.message}\n${thing.stack ?? ""}`;
-					}
-
-					break;
 				default:
 			}
-
-			return String(undefined);
-		});
-		parentPort?.postMessage(
-			new Message(ResponseMessageTypes.LOG, processedThings.join(" ")),
-		);
-	}
+		},
+	);
 
 	async function preprocess({
 		src,
@@ -207,7 +224,7 @@ function newWorker() {
 		let instance: Script | undefined;
 		let style: Style | undefined;
 
-		log("Worker: Preprocess:", "Starting preprocess");
+		console.log("Worker: Preprocess:", "Starting preprocess");
 
 		const result: {
 			code: string;
@@ -303,7 +320,10 @@ function newWorker() {
 			{ filename: filename || "unknown" },
 		);
 
-		log("Worker: Preprocess:", "Gotten result from `svelteCompilerPreprocess`");
+		console.log(
+			"Worker: Preprocess:",
+			"Gotten result from `svelteCompilerPreprocess`",
+		);
 
 		// Not clonable
 		delete result.toString;

@@ -45,4 +45,6 @@ interface PreprocessWithPreprocessorsData {
 	src: string;
 	filename: string;
 	autoPreprocessConfig: AutoPreprocessOptions;
+	resultSharedArrayBuffer: SharedArrayBuffer;
+	isDoneSharedArrayBuffer: SharedArrayBuffer;
 }
