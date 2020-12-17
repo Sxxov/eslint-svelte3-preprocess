@@ -1,5 +1,5 @@
 import deasync from "deasync";
-import { Worker, parentPort, isMainThread } from "worker_threads";
+import { Worker, parentPort, isMainThread, workerData } from "worker_threads";
 import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
 import { sveltePreprocess as sveltePreprocessAutoPreprocess } from "svelte-preprocess/dist/autoProcess";
@@ -18,60 +18,37 @@ const SLOW_POLLING_INDIVIDUAL_DURATION_MS = 100;
 const FAST_POLLING_TOTAL_DURATION_MS = 2000;
 const SLOW_POLLING_TOTAL_DURATION_MS = 2000;
 
-enum RequestMessageTypes {
-	"PREPROCESS_WITH_PREPROCESSORS",
-}
-
-enum ResponseMessageTypes {
-	"PREPROCESS_RESULT",
-}
-
-class Message {
-	constructor(
-		public type: RequestMessageTypes | ResponseMessageTypes,
-		public data: unknown,
-	) {}
-}
-
 let eslintSveltePreprocess:
 	| ReturnType<typeof getEslintSveltePreprocess>
 	| undefined;
 
 if (isMainThread) {
-	eslintSveltePreprocess = getEslintSveltePreprocess(
-		// `import.meta.url` is needed for esm interop
-		// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
-		// @ts-ignore
-		new Worker(__filename ?? import.meta?.url),
-	);
+	eslintSveltePreprocess = getEslintSveltePreprocess();
 } else {
-	newWorker();
+	(async () => newWorker())();
 }
 
-function getEslintSveltePreprocess(worker: Worker) {
+function getEslintSveltePreprocess() {
 	return (autoPreprocessConfig: AutoPreprocessOptions): proprocessFunction => (
 		src: string,
 		filename: string,
 	): Result => {
-		let result: Result | undefined;
-		let isDone = false;
-
-		worker.postMessage(
-			new Message(RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS, {
+		// `import.meta.url` is needed for esm interop
+		// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
+		// @ts-ignore
+		const worker = new Worker(__filename ?? import.meta?.url, {
+			workerData: {
 				src,
 				filename,
 				autoPreprocessConfig,
-			} as PreprocessWithPreprocessorsData),
-		);
+			},
+		});
+		let result: Result | undefined;
+		let isDone = false;
 
-		worker.on("message", (message) => {
-			switch (message.type) {
-				case ResponseMessageTypes.PREPROCESS_RESULT:
-					result = message.data as Result;
-					isDone = true;
-					break;
-				default:
-			}
+		worker.once("message", (message) => {
+			result = message as Result;
+			isDone = true;
 		});
 
 		// If timeout at 2000ms, or worker is done
@@ -101,38 +78,27 @@ function getEslintSveltePreprocess(worker: Worker) {
 			}
 		}
 
-		worker.removeAllListeners("message");
+		void worker.terminate();
 
 		return result as Result;
 	};
 }
 
-function newWorker() {
+async function newWorker() {
 	if (parentPort === null) {
 		throw new Error("parentPort is null");
 	}
 
 	let result: Result | undefined;
 
-	parentPort.on("message", async (message: Message) => {
-		switch (message.type) {
-			case RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS:
-				try {
-					result = await preprocess(
-						message.data as PreprocessWithPreprocessorsData,
-					);
-				} catch (err) {
-					console.error(err);
-					result = undefined;
-				}
+	try {
+		result = await preprocess(workerData as PreprocessWithPreprocessorsData);
+	} catch (err) {
+		console.error(err);
+		result = undefined;
+	}
 
-				parentPort?.postMessage(
-					new Message(ResponseMessageTypes.PREPROCESS_RESULT, result),
-				);
-				break;
-			default:
-		}
-	});
+	parentPort.postMessage(result);
 
 	async function preprocess({
 		src,
