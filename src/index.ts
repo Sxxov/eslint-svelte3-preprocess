@@ -24,6 +24,7 @@ enum RequestMessageTypes {
 
 enum ResponseMessageTypes {
 	"PREPROCESS_RESULT",
+	"LOG",
 }
 
 class Message {
@@ -36,6 +37,7 @@ class Message {
 let eslintSveltePreprocess:
 	| ReturnType<typeof getEslintSveltePreprocess>
 	| undefined;
+let lastResult: Result;
 
 if (isMainThread) {
 	eslintSveltePreprocess = getEslintSveltePreprocess(
@@ -56,6 +58,8 @@ function getEslintSveltePreprocess(worker: Worker) {
 		let result: Result | undefined;
 		let isDone = false;
 
+		console.log("Main:", "Sending request to worker");
+
 		worker.postMessage(
 			new Message(RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS, {
 				src,
@@ -67,8 +71,12 @@ function getEslintSveltePreprocess(worker: Worker) {
 		worker.on("message", (message) => {
 			switch (message.type) {
 				case ResponseMessageTypes.PREPROCESS_RESULT:
+					console.log("Main:", "Received response from worker");
 					result = message.data as Result;
 					isDone = true;
+					break;
+				case ResponseMessageTypes.LOG:
+					console.log(message.data as string);
 					break;
 				default:
 			}
@@ -83,6 +91,11 @@ function getEslintSveltePreprocess(worker: Worker) {
 			!isDone;
 			++i
 		) {
+			console.log(
+				"Main:",
+				"Polling for response from worker (fast), attempt:",
+				i,
+			);
 			deasync.sleep(FAST_POLLING_INDIVIDUAL_DURATION_MS);
 		}
 
@@ -97,13 +110,28 @@ function getEslintSveltePreprocess(worker: Worker) {
 				!isDone;
 				++i
 			) {
+				console.log(
+					"Main:",
+					"Polling for response from worker (slow), attempt:",
+					i,
+				);
 				deasync.sleep(SLOW_POLLING_INDIVIDUAL_DURATION_MS);
 			}
 		}
 
 		worker.removeAllListeners("message");
 
-		return result as Result;
+		if (result === undefined) {
+			console.log("Main:", "Result is undefined, returning `lastResult`");
+
+			return lastResult;
+		}
+
+		console.log("Main:", "Result is valid, returning `result`");
+
+		lastResult = result;
+
+		return result;
 	};
 }
 
@@ -117,14 +145,18 @@ function newWorker() {
 	parentPort.on("message", async (message: Message) => {
 		switch (message.type) {
 			case RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS:
+				log("Worker: Message:", "Received preprocessors");
+
 				try {
 					result = await preprocess(
 						message.data as PreprocessWithPreprocessorsData,
 					);
 				} catch (err) {
-					console.error(err);
+					log(err);
 					result = undefined;
 				}
+
+				log("Worker: Message:", "Finished preprocessing");
 
 				parentPort?.postMessage(
 					new Message(ResponseMessageTypes.PREPROCESS_RESULT, result),
@@ -133,6 +165,37 @@ function newWorker() {
 			default:
 		}
 	});
+
+	function log(...things: unknown[]): void {
+		const processedThings = things.map((thing) => {
+			switch (typeof thing) {
+				case "number":
+					return String(thing);
+				case "string":
+					return thing;
+				case "object":
+					if (thing === null) {
+						return "null";
+					}
+
+					if (!Number.isNaN(Number((thing as unknown[]).length))) {
+						return `[${(thing as unknown[]).join(", ")}]`;
+					}
+
+					if (thing instanceof Error) {
+						return `${thing.name}: ${thing.message}\n${thing.stack ?? ""}`;
+					}
+
+					break;
+				default:
+			}
+
+			return String(undefined);
+		});
+		parentPort?.postMessage(
+			new Message(ResponseMessageTypes.LOG, processedThings.join(" ")),
+		);
+	}
 
 	async function preprocess({
 		src,
@@ -143,6 +206,8 @@ function newWorker() {
 		let module: Script | undefined;
 		let instance: Script | undefined;
 		let style: Style | undefined;
+
+		log("Worker: Preprocess:", "Starting preprocess");
 
 		const result: {
 			code: string;
@@ -237,6 +302,8 @@ function newWorker() {
 			],
 			{ filename: filename || "unknown" },
 		);
+
+		log("Worker: Preprocess:", "Gotten result from `svelteCompilerPreprocess`");
 
 		// Not clonable
 		delete result.toString;
