@@ -18,6 +18,11 @@ let lastResult: Result;
 let lastTime = performance.now();
 
 if (isMainThread) {
+	// Declaring everything here instead of inside the anon function (`(autoPreprocessConfig) => ...`)
+	// gives a huge perf boost for some reason
+	// if declared inside, there seems to be a bottleneck messaging the worker, taking up ~300ms
+	// this is the same bottleneck of starting a new worker every call
+	// without it, it takes mere milliseconds to preprocess everything
 	const isDoneBuffer = new SharedArrayBuffer(4);
 	const isDoneView = new Int32Array(isDoneBuffer);
 	const dataBuffer = new SharedArrayBuffer(50 * 1024 * 1024);
@@ -56,11 +61,6 @@ function main(
 			autoPreprocessConfig,
 		} as PreprocessWithPreprocessorsData);
 
-		// Worker.once("message", (message: Result) => {
-		// 	console.log("Main:", "Received response from worker");
-		// 	result = message;
-		// });
-
 		console.log(
 			"Main:",
 			"Locking thread to wait for response from worker",
@@ -72,15 +72,9 @@ function main(
 		console.log("Main:", `Worker wait result: ${waitResult}`, time());
 		Atomics.store(isDoneView, 0, 0);
 
-		// Deasync.runLoopOnce();
-
 		const textDecoder = new TextDecoder();
 		const decoded = textDecoder.decode(dataView.subarray(0, dataLengthView[0]));
-		// Console.log("Main: Decode:", decoded);
-		// console.log("Main: DecodeLength:", decoded.length);
-		// console.log("Main: DecodeChar:", decoded.charCodeAt(2426));
-		// console.log("Main: DecodeChar:", decoded.substring(2420, 2432));
-		// console.log("Main: DecodeDataLength:", dataLengthView[0]);
+
 		try {
 			result = JSON.parse(decoded);
 		} catch (err) {
@@ -132,8 +126,6 @@ function worker() {
 
 		console.log("Worker: Message:", "Writing preprocess result", time());
 
-		// ParentPort?.postMessage(result);
-
 		const [isDoneView, dataView, dataLengthView]: [
 			Int32Array,
 			Uint8Array,
@@ -141,7 +133,6 @@ function worker() {
 		] = workerData;
 
 		const textEncoder = new TextEncoder();
-		// Console.log("Worker: Encode:", JSON.stringify(result));
 		const encodedResult = textEncoder.encode(
 			result === undefined ? "" : JSON.stringify(result),
 		);
