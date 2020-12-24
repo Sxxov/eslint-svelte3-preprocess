@@ -1,5 +1,4 @@
 import { Worker, parentPort, isMainThread, workerData } from "worker_threads";
-import { performance } from "perf_hooks";
 import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
 import { sveltePreprocess as sveltePreprocessAutoPreprocess } from "svelte-preprocess/dist/autoProcess";
@@ -15,7 +14,6 @@ import type {
 
 let eslintSveltePreprocess: ReturnType<typeof main> | undefined;
 let lastResult: Result;
-let lastTime = performance.now();
 
 if (isMainThread) {
 	// Declaring everything here instead of inside the anon function (`(autoPreprocessConfig) => ...`)
@@ -53,7 +51,7 @@ function main(
 	): Result => {
 		let result: Result | undefined;
 
-		console.log("Main:", "Sending request to worker", time());
+		console.log("Main:", "Sending request to worker");
 
 		worker.postMessage({
 			src,
@@ -61,15 +59,11 @@ function main(
 			autoPreprocessConfig,
 		} as PreprocessWithPreprocessorsData);
 
-		console.log(
-			"Main:",
-			"Locking thread to wait for response from worker",
-			time(),
-		);
+		console.log("Main:", "Locking thread to wait for response from worker");
 
 		const waitResult = Atomics.wait(isDoneView, 0, 0, 5000);
 
-		console.log("Main:", `Worker wait result: ${waitResult}`, time());
+		console.log("Main:", `Worker wait result: ${waitResult}`);
 		Atomics.store(isDoneView, 0, 0);
 
 		const textDecoder = new TextDecoder();
@@ -81,7 +75,6 @@ function main(
 			console.log(
 				"Main:",
 				`Parsing JSON returned an error, returning \`lastResult\``,
-				time(),
 			);
 			console.log(err);
 
@@ -92,13 +85,12 @@ function main(
 			console.log(
 				"Main:",
 				`Result is invalid (${String(result)}), returning \`lastResult\``,
-				time(),
 			);
 
 			return lastResult;
 		}
 
-		console.log("Main:", "Result is valid, returning `result`", time());
+		console.log("Main:", "Result is valid, returning `result`");
 
 		lastResult = result;
 
@@ -114,17 +106,17 @@ function worker() {
 	let result: Result | undefined;
 
 	parentPort.on("message", async (message: PreprocessWithPreprocessorsData) => {
-		console.log("Worker: Message:", "Received preprocessors", time());
+		console.log("Worker: Message:", "Received preprocessors");
 
 		try {
 			result = await preprocess(message);
-			console.log("Worker: Message: Success!", time());
+			console.log("Worker: Message: Success!");
 		} catch (err) {
-			console.log("Worker: Message: Error:", err, time());
+			console.log("Worker: Message: Error:", err);
 			result = undefined;
 		}
 
-		console.log("Worker: Message:", "Writing preprocess result", time());
+		console.log("Worker: Message:", "Writing preprocess result");
 
 		const [isDoneView, dataView, dataLengthView]: [
 			Int32Array,
@@ -140,7 +132,7 @@ function worker() {
 		dataView.set(encodedResult, 0);
 		dataLengthView[0] = encodedResult.length;
 
-		console.log("Worker: Message:", "Unlocking main thread", time());
+		console.log("Worker: Message:", "Unlocking main thread");
 
 		Atomics.store(isDoneView, 0, 1);
 		Atomics.notify(isDoneView, 0, Number(Infinity));
@@ -260,10 +252,6 @@ function worker() {
 		// Not clonable
 		delete result.toString;
 
-		// Console.log("Worker: Preprocess: Markup:", markup);
-		// console.log("Worker: Preprocess: Instance", instance);
-		// console.log("Worker: Preprocess: Module:", module);
-
 		return {
 			...result,
 			instance: instance as Script,
@@ -272,13 +260,6 @@ function worker() {
 			style: style as Style,
 		};
 	}
-}
-
-function time() {
-	const t = performance.now() - lastTime;
-	lastTime = performance.now();
-
-	return `${t} -- ${Date.now()}`;
 }
 
 module.exports = eslintSveltePreprocess;
