@@ -1,9 +1,9 @@
-import deasync from "deasync";
-import { Worker, parentPort, isMainThread } from "worker_threads";
+import { Worker, parentPort, isMainThread, workerData } from "worker_threads";
+import { performance } from "perf_hooks";
 import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
 import { sveltePreprocess as sveltePreprocessAutoPreprocess } from "svelte-preprocess/dist/autoProcess";
-import {
+import type {
 	AutoPreprocessOptions,
 	Markup,
 	PreprocessWithPreprocessorsData,
@@ -13,116 +13,98 @@ import {
 	Style,
 } from "./types";
 
-const FAST_POLLING_INDIVIDUAL_DURATION_MS = 10;
-const SLOW_POLLING_INDIVIDUAL_DURATION_MS = 100;
-const FAST_POLLING_TOTAL_DURATION_MS = 2000;
-const SLOW_POLLING_TOTAL_DURATION_MS = 2000;
-
-enum RequestMessageTypes {
-	"PREPROCESS_WITH_PREPROCESSORS",
-}
-
-enum ResponseMessageTypes {
-	"PREPROCESS_RESULT",
-	"LOG",
-}
-
-class Message {
-	constructor(
-		public type: RequestMessageTypes | ResponseMessageTypes,
-		public data: unknown,
-	) {}
-}
-
-let eslintSveltePreprocess:
-	| ReturnType<typeof getEslintSveltePreprocess>
-	| undefined;
+let eslintSveltePreprocess: ReturnType<typeof main> | undefined;
 let lastResult: Result;
+let lastTime = performance.now();
 
 if (isMainThread) {
-	eslintSveltePreprocess = getEslintSveltePreprocess(
-		// `import.meta.url` is needed for esm interop
-		// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
-		// @ts-ignore
-		new Worker(__filename ?? import.meta?.url),
-	);
+	const isDoneBuffer = new SharedArrayBuffer(4);
+	const isDoneView = new Int32Array(isDoneBuffer);
+	const dataBuffer = new SharedArrayBuffer(50 * 1024 * 1024);
+	const dataView = new Uint8Array(dataBuffer);
+	const dataLengthBuffer = new SharedArrayBuffer(4);
+	const dataLengthView = new Uint32Array(dataLengthBuffer);
+	// `import.meta.url` is needed for esm interop
+	// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
+	// @ts-ignore
+	const worker = new Worker(__filename ?? import.meta?.url, {
+		workerData: [isDoneView, dataView, dataLengthView],
+	});
+
+	eslintSveltePreprocess = main(isDoneView, dataView, dataLengthView, worker);
 } else {
-	newWorker();
+	worker();
 }
 
-function getEslintSveltePreprocess(worker: Worker) {
+function main(
+	isDoneView: Int32Array,
+	dataView: Uint8Array,
+	dataLengthView: Uint32Array,
+	worker: Worker,
+) {
 	return (autoPreprocessConfig: AutoPreprocessOptions): proprocessFunction => (
 		src: string,
 		filename: string,
 	): Result => {
 		let result: Result | undefined;
-		let isDone = false;
 
-		console.log("Main:", "Sending request to worker");
+		console.log("Main:", "Sending request to worker", time());
 
-		worker.postMessage(
-			new Message(RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS, {
-				src,
-				filename,
-				autoPreprocessConfig,
-			} as PreprocessWithPreprocessorsData),
+		worker.postMessage({
+			src,
+			filename,
+			autoPreprocessConfig,
+		} as PreprocessWithPreprocessorsData);
+
+		// Worker.once("message", (message: Result) => {
+		// 	console.log("Main:", "Received response from worker");
+		// 	result = message;
+		// });
+
+		console.log(
+			"Main:",
+			"Locking thread to wait for response from worker",
+			time(),
 		);
 
-		worker.once("message", (message) => {
-			switch (message.type) {
-				case ResponseMessageTypes.PREPROCESS_RESULT:
-					console.log("Main:", "Received response from worker");
-					result = message.data as Result;
-					isDone = true;
-					break;
-				default:
-			}
-		});
+		const waitResult = Atomics.wait(isDoneView, 0, 0, 5000);
 
-		// If timeout at 2000ms, or worker is done
-		for (
-			let i = 0;
-			i <
-				FAST_POLLING_TOTAL_DURATION_MS / FAST_POLLING_INDIVIDUAL_DURATION_MS &&
-			// eslint-disable-next-line no-unmodified-loop-condition
-			!isDone;
-			++i
-		) {
+		console.log("Main:", `Worker wait result: ${waitResult}`, time());
+		Atomics.store(isDoneView, 0, 0);
+
+		// Deasync.runLoopOnce();
+
+		const textDecoder = new TextDecoder();
+		const decoded = textDecoder.decode(dataView.subarray(0, dataLengthView[0]));
+		// Console.log("Main: Decode:", decoded);
+		// console.log("Main: DecodeLength:", decoded.length);
+		// console.log("Main: DecodeChar:", decoded.charCodeAt(2426));
+		// console.log("Main: DecodeChar:", decoded.substring(2420, 2432));
+		// console.log("Main: DecodeDataLength:", dataLengthView[0]);
+		try {
+			result = JSON.parse(decoded);
+		} catch (err) {
 			console.log(
 				"Main:",
-				"Polling for response from worker (fast), attempt:",
-				i,
+				`Parsing JSON returned an error, returning \`lastResult\``,
+				time(),
 			);
-			deasync.sleep(FAST_POLLING_INDIVIDUAL_DURATION_MS);
-		}
-
-		if (!isDone) {
-			// Continue trying for 2000ms at lower ping rate
-			for (
-				let i = 0;
-				i <
-					SLOW_POLLING_TOTAL_DURATION_MS /
-						SLOW_POLLING_INDIVIDUAL_DURATION_MS &&
-				// eslint-disable-next-line no-unmodified-loop-condition
-				!isDone;
-				++i
-			) {
-				console.log(
-					"Main:",
-					"Polling for response from worker (slow), attempt:",
-					i,
-				);
-				deasync.sleep(SLOW_POLLING_INDIVIDUAL_DURATION_MS);
-			}
-		}
-
-		if (result === undefined) {
-			console.log("Main:", "Result is undefined, returning `lastResult`");
+			console.log(err);
 
 			return lastResult;
 		}
 
-		console.log("Main:", "Result is valid, returning `result`");
+		if (result === undefined) {
+			console.log(
+				"Main:",
+				`Result is invalid (${String(result)}), returning \`lastResult\``,
+				time(),
+			);
+
+			return lastResult;
+		}
+
+		console.log("Main:", "Result is valid, returning `result`", time());
 
 		lastResult = result;
 
@@ -130,35 +112,47 @@ function getEslintSveltePreprocess(worker: Worker) {
 	};
 }
 
-function newWorker() {
+function worker() {
 	if (parentPort === null) {
 		throw new Error("parentPort is null");
 	}
 
 	let result: Result | undefined;
 
-	parentPort.on("message", async (message: Message) => {
-		switch (message.type) {
-			case RequestMessageTypes.PREPROCESS_WITH_PREPROCESSORS:
-				console.log("Worker: Message:", "Received preprocessors");
+	parentPort.on("message", async (message: PreprocessWithPreprocessorsData) => {
+		console.log("Worker: Message:", "Received preprocessors", time());
 
-				try {
-					result = await preprocess(
-						message.data as PreprocessWithPreprocessorsData,
-					);
-				} catch (err) {
-					console.log("Worker: Message: Error:", err);
-					result = undefined;
-				}
-
-				console.log("Worker: Message:", "Finished preprocessing");
-
-				parentPort?.postMessage(
-					new Message(ResponseMessageTypes.PREPROCESS_RESULT, result),
-				);
-				break;
-			default:
+		try {
+			result = await preprocess(message);
+			console.log("Worker: Message: Success!", time());
+		} catch (err) {
+			console.log("Worker: Message: Error:", err, time());
+			result = undefined;
 		}
+
+		console.log("Worker: Message:", "Writing preprocess result", time());
+
+		// ParentPort?.postMessage(result);
+
+		const [isDoneView, dataView, dataLengthView]: [
+			Int32Array,
+			Uint8Array,
+			Uint32Array,
+		] = workerData;
+
+		const textEncoder = new TextEncoder();
+		// Console.log("Worker: Encode:", JSON.stringify(result));
+		const encodedResult = textEncoder.encode(
+			result === undefined ? "" : JSON.stringify(result),
+		);
+
+		dataView.set(encodedResult, 0);
+		dataLengthView[0] = encodedResult.length;
+
+		console.log("Worker: Message:", "Unlocking main thread", time());
+
+		Atomics.store(isDoneView, 0, 1);
+		Atomics.notify(isDoneView, 0, Number(Infinity));
 	});
 
 	async function preprocess({
@@ -275,6 +269,10 @@ function newWorker() {
 		// Not clonable
 		delete result.toString;
 
+		// Console.log("Worker: Preprocess: Markup:", markup);
+		// console.log("Worker: Preprocess: Instance", instance);
+		// console.log("Worker: Preprocess: Module:", module);
+
 		return {
 			...result,
 			instance: instance as Script,
@@ -283,6 +281,13 @@ function newWorker() {
 			style: style as Style,
 		};
 	}
+}
+
+function time() {
+	const t = performance.now() - lastTime;
+	lastTime = performance.now();
+
+	return `${t} -- ${Date.now()}`;
 }
 
 module.exports = eslintSveltePreprocess;
