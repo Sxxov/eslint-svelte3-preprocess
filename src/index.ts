@@ -2,6 +2,7 @@ import { Worker, parentPort, isMainThread, workerData } from "worker_threads";
 import { preprocess as svelteCompilerPreprocess } from "svelte/compiler";
 import esTree from "@typescript-eslint/typescript-estree";
 import { sveltePreprocess as sveltePreprocessAutoPreprocess } from "svelte-preprocess/dist/autoProcess";
+import { fileURLToPath } from "url";
 import type {
 	AutoPreprocessOptions,
 	Markup,
@@ -12,10 +13,15 @@ import type {
 	Style,
 } from "./types";
 
-let eslintSveltePreprocess: ReturnType<typeof main> | undefined;
 let lastResult: Result;
 
 if (isMainThread) {
+	module.exports = main();
+} else {
+	worker();
+}
+
+function main() {
 	// Declaring everything here instead of inside the anon function (`(autoPreprocessConfig) => ...`)
 	// gives a huge perf boost for some reason
 	// if declared inside, there seems to be a bottleneck messaging the worker, taking up ~300ms
@@ -27,29 +33,35 @@ if (isMainThread) {
 	const dataView = new Uint8Array(dataBuffer);
 	const dataLengthBuffer = new SharedArrayBuffer(4);
 	const dataLengthView = new Uint32Array(dataLengthBuffer);
-	// `import.meta.url` is needed for esm interop
-	// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
-	// @ts-ignore
-	const worker = new Worker(__filename ?? import.meta?.url, {
-		workerData: [isDoneView, dataView, dataLengthView],
-	});
+	const isRunningOnce = !process.argv.includes("--node-ipc");
 
-	eslintSveltePreprocess = main(isDoneView, dataView, dataLengthView, worker);
-} else {
-	worker();
-}
+	let currentFileLocation = "";
 
-function main(
-	isDoneView: Int32Array,
-	dataView: Uint8Array,
-	dataLengthView: Uint32Array,
-	worker: Worker,
-) {
+	try {
+		currentFileLocation = __filename;
+		// `import.meta.url` is needed for esm interop
+		// eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error, @typescript-eslint/ban-ts-comment
+		// @ts-ignore
+		currentFileLocation = fileURLToPath(import.meta?.url);
+	} catch (_) {
+		//
+	}
+
+	let worker: Worker | undefined = getNewWorker();
+
 	return (autoPreprocessConfig: AutoPreprocessOptions): proprocessFunction => (
 		src: string,
 		filename: string,
 	): Result => {
 		let result: Result | undefined;
+
+		// In case the worker is killed
+		// eg. somehow using ESLint async-ly and running this function again,
+		// after finishing the event loop once.
+		// finishing an event loop would've triggered the killing of the worker
+		if (worker === undefined) {
+			worker = getNewWorker();
+		}
 
 		console.log("Main:", "Sending request to worker");
 
@@ -71,6 +83,12 @@ function main(
 
 		try {
 			result = JSON.parse(decoded);
+
+			// It is possible for JSON.parse to return "undefined", eg. in SyntaxErrors
+			// so catch that and return a cached result instead of letting ESLint panic
+			if (!result) {
+				throw new Error(`Result is invalid (${String(result)})`);
+			}
 		} catch (err) {
 			console.log(
 				"Main:",
@@ -81,21 +99,28 @@ function main(
 			return lastResult;
 		}
 
-		if (result === undefined) {
-			console.log(
-				"Main:",
-				`Result is invalid (${String(result)}), returning \`lastResult\``,
-			);
-
-			return lastResult;
-		}
-
 		console.log("Main:", "Result is valid, returning `result`");
+
+		if (isRunningOnce) {
+			// Kill worker on next tick if running in CLI
+			// prevents it from locking up and lets it exit when the event loop is finished
+			setTimeout(async () => {
+				await worker?.terminate();
+
+				worker = undefined;
+			}, 0);
+		}
 
 		lastResult = result;
 
 		return result;
 	};
+
+	function getNewWorker() {
+		return new Worker(currentFileLocation, {
+			workerData: [isDoneView, dataView, dataLengthView, isRunningOnce],
+		});
+	}
 }
 
 function worker() {
@@ -249,9 +274,6 @@ function worker() {
 			"Gotten result from `svelteCompilerPreprocess`",
 		);
 
-		// Not clonable
-		delete result.toString;
-
 		return {
 			...result,
 			instance: instance as Script,
@@ -262,5 +284,4 @@ function worker() {
 	}
 }
 
-module.exports = eslintSveltePreprocess;
-export default eslintSveltePreprocess;
+export default module.exports;
